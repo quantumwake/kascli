@@ -17,18 +17,89 @@ Speech runs in a detached process group so it never blocks the UI; a new
 utterance interrupts the previous one. Everything degrades to (message, True).
 """
 
+import json
 import os
 import pathlib
 import platform
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 
 _proc: subprocess.Popen | None = None
 
 _KOKORO_DEFAULT = "am_onyx"  # deep male; bm_george (UK) / af_heart (warm) etc.
 _NATIVE_DEFAULT = "Daniel"  # en_GB — the deepest real voice usually present
+
+# --- persistent voice settings (/voice) -------------------------------------
+# Precedence per setting: env var (session override) > ~/.kascode/voice.json
+# (the /voice command's durable store) > built-in default. Read at synth time,
+# not import time, so /voice changes apply to the very next utterance.
+
+_VOICE_STORE = pathlib.Path.home() / ".kascode" / "voice.json"
+
+# Kokoro voice ids encode dialect+gender in the prefix: a=American, b=British,
+# e=Spanish, f=French, h=Hindi, i=Italian, j=Japanese, p=Portuguese, z=Chinese;
+# then f/m for gender (af_heart, bm_george, ...).
+DIALECTS = {
+    "a": "American English",
+    "b": "British English",
+    "e": "Spanish",
+    "f": "French",
+    "h": "Hindi",
+    "i": "Italian",
+    "j": "Japanese",
+    "p": "Portuguese",
+    "z": "Chinese",
+}
+
+
+def _store() -> dict:
+    try:
+        return json.loads(_VOICE_STORE.read_text())
+    except Exception:
+        return {}
+
+
+def save_setting(key: str, value) -> None:
+    """Persist one /voice setting (None deletes it)."""
+    d = _store()
+    if value is None:
+        d.pop(key, None)
+    else:
+        d[key] = value
+    _VOICE_STORE.parent.mkdir(exist_ok=True)
+    _VOICE_STORE.write_text(json.dumps(d, indent=2) + "\n")
+
+
+def _setting(env: str, key: str, default: str) -> str:
+    v = os.environ.get(env)
+    if v is not None:
+        return v
+    return str(_store().get(key, default))
+
+
+def voice_settings() -> dict:
+    """The effective settings, for /voice status display."""
+    return {
+        "voice": _setting("KAS_KOKORO_VOICE", "voice", _KOKORO_DEFAULT),
+        "say_voice": _setting("KAS_TTS_VOICE", "say_voice", _NATIVE_DEFAULT),
+        "speed": _setting("KAS_TTS_SPEED", "speed", "1.0"),
+        "pitch": _setting("KAS_TTS_PITCH_SEMITONES", "pitch", "0"),
+        "fx": _setting("KAS_TTS_FX", "fx", "warrior"),
+        "engine": "kokoro" if _mlx_available() else "native",
+    }
+
+
+def kokoro_voices() -> list[str]:
+    """Voice ids shipped with the cached Kokoro model (empty if not cached)."""
+    model = os.environ.get("KAS_TTS_MODEL", "mlx-community/Kokoro-82M-bf16")
+    hub = pathlib.Path.home() / ".cache" / "huggingface" / "hub"
+    d = hub / ("models--" + model.replace("/", "--")) / "snapshots"
+    names = {f.stem for f in d.glob("*/voices/*") if f.suffix in (".safetensors", ".pt", ".bin")}
+    return sorted(names)
+
 
 # The voice-character FX chains (ffmpeg -af). Sample-rate-independent: normalise
 # to 44.1k, drop the pitch ~18% (asetrate), restore tempo, then space + shimmer +
@@ -43,33 +114,60 @@ _FX_PRESETS = {
 }
 
 
+def _pitch_stage(semitones: float) -> str:
+    """An ffmpeg stage shifting pitch by N semitones, tempo-compensated — the
+    engine-agnostic pitch control (Kokoro has no native pitch knob)."""
+    if not semitones:
+        return ""
+    factor = 2.0 ** (semitones / 12.0)  # ±12 semi → 0.5–2.0, atempo's range
+    rate, tempo = round(44100 * factor), f"{1 / factor:.4f}"
+    return f"aresample=44100,asetrate={rate},aresample=44100,atempo={tempo}"
+
+
 def _fx_filter() -> str:
-    """The ffmpeg -af chain for the configured character, or "" for none."""
+    """The ffmpeg -af chain: user pitch shift (semitones) + the character
+    preset. KAS_TTS_FILTER (raw chain) replaces the preset but keeps pitch."""
     raw = os.environ.get("KAS_TTS_FILTER")
-    if raw is not None:
-        return raw
-    preset = os.environ.get("KAS_TTS_FX", "warrior").lower()
-    return _FX_PRESETS.get(preset, _FX_PRESETS["warrior"])
+    if raw is None:
+        preset = _setting("KAS_TTS_FX", "fx", "warrior").lower()
+        raw = _FX_PRESETS.get(preset, _FX_PRESETS["warrior"])
+    try:
+        semis = float(_setting("KAS_TTS_PITCH_SEMITONES", "pitch", "0"))
+    except ValueError:
+        semis = 0.0
+    pitch = _pitch_stage(semis)
+    return ",".join(s for s in (pitch, raw) if s)
 
 
 def _mlx_available() -> bool:
     import importlib.util
 
-    return importlib.util.find_spec("mlx_audio") is not None
+    # Kokoro hard-requires misaki (its G2P text processor) at RUNTIME even
+    # though mlx-audio ships without it — with mlx_audio present but misaki
+    # missing, synthesis errors out after model load. Treat that as "not
+    # available" so the pipeline builds the native voice instead of silence.
+    return all(importlib.util.find_spec(m) is not None for m in ("mlx_audio", "misaki"))
 
 
 def _native_synth(text: str, out: str) -> list[str] | None:
     """Argv that synthesises `text` to the audio file `out` with a native engine,
     or None if none is available."""
+    try:
+        speed = float(_setting("KAS_TTS_SPEED", "speed", "1.0"))
+    except ValueError:
+        speed = 1.0
     if platform.system() == "Darwin" and shutil.which("say"):
-        voice = os.environ.get("KAS_TTS_VOICE", _NATIVE_DEFAULT)
+        voice = _setting("KAS_TTS_VOICE", "say_voice", _NATIVE_DEFAULT)
         pitch = os.environ.get("KAS_TTS_PITCH", "18")  # say [[pbas]] base pitch
-        rate = os.environ.get("KAS_TTS_RATE", "155")  # words per minute
+        # cadence: KAS_TTS_RATE wins; else the shared speed scales the base wpm
+        rate = os.environ.get("KAS_TTS_RATE") or str(round(155 * speed))
         body = f"[[pbas {pitch}]] [[rate {rate}]] {text}"
-        return ["say", "-v", voice, "-o", out, body]
+        # `say -o x.wav` FAILS ("fmt?") without an explicit linear-PCM data
+        # format — WAVE only accepts PCM, and say's default codec isn't.
+        return ["say", "-v", voice, "--data-format=LEF32@22050", "-o", out, body]
     for bin_ in ("espeak-ng", "espeak"):
         if shutil.which(bin_):
-            rate = os.environ.get("KAS_TTS_RATE", "150")
+            rate = os.environ.get("KAS_TTS_RATE") or str(round(150 * speed))
             return [bin_, "-p", "20", "-s", rate, "-w", out, text]
     return None
 
@@ -81,11 +179,19 @@ def _kokoro_synth(text: str, out: str) -> str | None:
     if not _mlx_available():
         return None
     model = os.environ.get("KAS_TTS_MODEL", "mlx-community/Kokoro-82M-bf16")
-    voice = os.environ.get("KAS_KOKORO_VOICE", _KOKORO_DEFAULT)
+    voice = _setting("KAS_KOKORO_VOICE", "voice", _KOKORO_DEFAULT)
+    speed = _setting("KAS_TTS_SPEED", "speed", "1.0")
     prefix = out + ".koko"
+    # OUR interpreter, not bare `python` — the detached sh resolves `python`
+    # from PATH, which may be a different env without mlx_audio (or absent).
+    py = sys.executable
     gen = (
-        f"python -m mlx_audio.tts.generate --model {shlex.quote(model)} "
+        f"{shlex.quote(py)} -m mlx_audio.tts.generate --model {shlex.quote(model)} "
         f"--voice {shlex.quote(voice)} --text {shlex.quote(text)} "
+        f"--speed {shlex.quote(speed)} "
+        # Kokoro's lang code IS the voice prefix (a=en-US, b=en-GB, ...): pass
+        # it so a British/etc voice gets the matching G2P dialect, not en-US.
+        f"--lang_code {shlex.quote(voice[:1])} "
         f"--file_prefix {shlex.quote(prefix)}"
     )
     # move the produced wav to the canonical out path
@@ -112,12 +218,17 @@ def _pipeline(text: str) -> list[str] | None:
     tmp = pathlib.Path(tempfile.mkdtemp(prefix="kas-tts-"))
     raw, played = str(tmp / "raw.wav"), str(tmp / "out.wav")
 
-    synth: str | None = None
+    kokoro: str | None = None
     if engine != "native":  # auto / mlx: prefer Kokoro when present
-        synth = _kokoro_synth(text, raw)
-    if synth is None:  # native (forced, or Kokoro absent)
-        argv = _native_synth(text, raw)
-        synth = shlex.join(argv) if argv else None
+        kokoro = _kokoro_synth(text, raw)
+    argv = _native_synth(text, raw)
+    native = shlex.join(argv) if argv else None
+    if kokoro and native:
+        # Runtime fallback: a Kokoro that errors mid-flight (missing model,
+        # broken dep) must degrade to the native voice, not to silence.
+        synth = f"{{ {kokoro} ; }} || {native}"
+    else:
+        synth = kokoro or native
     if synth is None:
         return None
 
