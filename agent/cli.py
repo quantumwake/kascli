@@ -182,7 +182,8 @@ def _offer_to_start_server(base_url: str, model: str | None) -> tuple[str | None
         "pulls the model into the GPU and can take a while…"
     )
     proc = _spawn_server(port, model=model)
-    if _wait_for_server(base_url, proc):
+    logf = _server_state()[2]  # tail the daemon log: live download/load progress,
+    if _wait_for_server(base_url, proc, logf=logf):  # and stall detection needs it
         print("server ready.")
         return served_info(base_url)
     print("server failed to start — check the log with: kas serve --logs")

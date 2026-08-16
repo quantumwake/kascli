@@ -37,7 +37,7 @@ def offer(url, tty, answer, *, model=None, can_start=True, served=("served-model
     sys.stdin = FakeStdin(tty)
     builtins.input = lambda *a: answer
     cli._spawn_server = lambda port, model=None: "fake-proc"
-    cli._wait_for_server = lambda base, proc, attempts=180: can_start
+    cli._wait_for_server = lambda base, proc, logf=None, stall_polls=120: can_start
     cli.served_info = lambda base: served
     cli._pick_model = lambda: None  # picker covered separately
     try:

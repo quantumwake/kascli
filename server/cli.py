@@ -53,6 +53,12 @@ def main() -> None:
     if a.quant:
         os.environ["KAS_GGUF_QUANT"] = a.quant
     os.environ["KAS_PORT"] = str(a.port)
+    # In-process model downloads (mlx_lm/hf snapshot_download) must not use the
+    # xet backend: it stalls silently and hides progress (same policy as the
+    # Makefile's download target). setdefault so an explicit opt-in
+    # (KAS_XET=1 / your own HF_HUB_DISABLE_XET) still wins.
+    if os.environ.get("KAS_XET") != "1":
+        os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
     uvicorn.run("server.app:app", host=a.host, port=a.port)
 
 
