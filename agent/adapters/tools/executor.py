@@ -16,6 +16,7 @@ from ..workspace.git import GitWorkspace
 from ._bash_tools import BashToolsMixin
 from ._file_tools import FileToolsMixin
 from ._image_tools import ImageToolsMixin
+from ._video_tools import VideoToolsMixin
 from .bash import BashSession
 from .files import PathResolver
 from .memory import Memory
@@ -25,7 +26,7 @@ from .web import web_fetch, web_search
 # The tool_* handlers come from the per-group mixins; run() finds each by name
 # across the MRO via getattr(self, "tool_<name>"), so adding a tool group is a
 # new mixin, not a change here.
-class ToolRunner(BashToolsMixin, FileToolsMixin, ImageToolsMixin):
+class ToolRunner(BashToolsMixin, FileToolsMixin, ImageToolsMixin, VideoToolsMixin):
     MUTATING_TOOLS = (
         "write_file",
         "edit_file",
@@ -33,6 +34,7 @@ class ToolRunner(BashToolsMixin, FileToolsMixin, ImageToolsMixin):
         "bash",
         "bash_send_input",
         "generate_image",
+        "generate_video",
     )
 
     def __init__(
@@ -82,10 +84,14 @@ class ToolRunner(BashToolsMixin, FileToolsMixin, ImageToolsMixin):
         self.hard_limit_frac = 0.85  # fraction of native window that forces compaction
         self.last_input_tokens = 0  # most recent prompt size, for /ctx display
         self.persist_kv = True  # send the session dir so the server persists KV (/kv)
-        # Async image generation: tasks render off-thread so the loop never waits.
+        # Async media generation: tasks render off-thread so the loop never
+        # waits. Image and video share one bounded pool (GPU jobs), but keep
+        # separate task tables so image_status / video_status stay per-kind.
         self._art_tasks: dict[int, dict] = {}
         self._art_seq = 0
         self._art_pool = None
+        self._video_tasks: dict[int, dict] = {}
+        self._video_seq = 0
 
     # -- workspace checkpointing ----------------------------------------------
 

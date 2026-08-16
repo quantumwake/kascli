@@ -202,4 +202,60 @@ with tempfile.TemporaryDirectory() as tmp:
     assert r.tool_image_status(99)[1] and "no image task" in r.tool_image_status(99)[0]
     print("async image tasks: OK")
 
+
+# ---------------------------------------------------------------------------
+# generate_video: graceful when the backend is absent + command construction
+# ---------------------------------------------------------------------------
+
+from agent.adapters.tools.video import build_command as video_command
+from agent.adapters.tools.video import render as video_render
+
+with tempfile.TemporaryDirectory() as tmp:
+    # Backend missing -> a helpful error, never a crash.
+    _saved_vbin = _cfg.VIDEO_BIN
+    _cfg.VIDEO_BIN = "definitely-not-a-real-binary-xyz"
+    out, err = video_render("a rocket launch", pathlib.Path(tmp) / "rocket.mp4")
+    assert err and "not found" in out and "video" in out, (out, err)
+
+    # Empty prompt is rejected.
+    out, err = video_render("   ", pathlib.Path(tmp) / "x.mp4")
+    assert err and "non-empty" in out, (out, err)
+    _cfg.VIDEO_BIN = _saved_vbin
+
+    # Command assembly: prompt + output + model repo + frames + size + seed + image.
+    cmd = video_command(
+        "a rocket launch", pathlib.Path(tmp) / "rocket.mp4", seed=7, frames=33, image="still.png"
+    )
+    assert "--prompt" in cmd and "a rocket launch" in cmd, cmd
+    assert "--output-path" in cmd and "--model-repo" in cmd, cmd
+    assert "--num-frames" in cmd and "33" in cmd, cmd
+    assert "--seed" in cmd and "7" in cmd and "--image" in cmd, cmd
+    print("generate_video: OK")
+
+
+# ---------------------------------------------------------------------------
+# generate_video is ASYNC: returns a task id immediately; video_status tracks it
+# ---------------------------------------------------------------------------
+
+with tempfile.TemporaryDirectory() as tmp:
+    r = runner(tmp)
+    assert r.tool_video_status()[0] == "no video tasks this session"
+
+    _saved_vbin = _cfg.VIDEO_BIN
+    _cfg.VIDEO_BIN = "definitely-not-a-real-binary-xyz"  # render will fail fast in the bg
+    out, err = r.tool_generate_video("a rocket launch")
+    assert not err and "task #1 started" in out, (out, err)
+
+    line = ""
+    for _ in range(60):
+        line, _e = r.tool_video_status(1)
+        if "running" not in line:
+            break
+        _time.sleep(0.05)
+    _cfg.VIDEO_BIN = _saved_vbin
+    assert "#1" in line and "error" in line, line
+    assert "#1" in r.tool_video_status()[0]  # list-all view
+    assert r.tool_video_status(99)[1] and "no video task" in r.tool_video_status(99)[0]
+    print("async video tasks: OK")
+
 print("all tool tests passed")
