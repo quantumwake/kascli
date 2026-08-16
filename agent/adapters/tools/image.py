@@ -17,20 +17,25 @@ every prompt) and/or KAS_ART_LORAS (a locked style LoRA).
 
 import pathlib
 import re
-import shutil
 import subprocess
 
 from ... import config
+from ._binresolve import resolve_bin
 
 
 def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:40] or "image"
 
 
-def build_command(prompt: str, out_path, *, seed=None, steps=None) -> list[str]:
+def find_bin() -> str | None:
+    """Locate the image-generator CLI (PATH, then beside our interpreter)."""
+    return resolve_bin(config.ART_BIN)
+
+
+def build_command(prompt: str, out_path, *, seed=None, steps=None, bin_path=None) -> list[str]:
     """Assemble the mflux CLI invocation from the (env-tunable) config."""
     full = f"{config.ART_STYLE}, {prompt}" if config.ART_STYLE else prompt
-    cmd = [config.ART_BIN]
+    cmd = [bin_path or config.ART_BIN]
     if config.ART_MODEL:
         cmd += ["--model", config.ART_MODEL]
     cmd += ["--prompt", full, "--output", str(out_path), "--steps", str(steps or config.ART_STEPS)]
@@ -66,11 +71,12 @@ def render(
     for async; see ToolRunner.tool_generate_image.)"""
     if not prompt or not prompt.strip():
         return "generate_image requires a non-empty 'prompt'", True
-    if shutil.which(config.ART_BIN) is None:
+    bin_path = find_bin()
+    if bin_path is None:
         return _missing_hint(), True
     out = pathlib.Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    cmd = build_command(prompt, out, seed=seed, steps=steps)
+    cmd = build_command(prompt, out, seed=seed, steps=steps, bin_path=bin_path)
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
     except FileNotFoundError:
