@@ -1,14 +1,24 @@
 """Video-generation tool handlers, split out as a mixin on ToolRunner.
 
-Mirrors the image mixin: `generate_video` is ASYNC — it submits the render to
-the SHARED media thread pool (self._art_pool, so image + video GPU jobs stay
-bounded together) and returns immediately; `video_status` polls the task table.
-Task state lives on the ToolRunner instance (self._video_tasks); the mlx-video
-import is deferred (the 'video' extra is optional).
+Mirrors the image mixin, but on its OWN single-worker pool: one video can run
+for minutes (up to VIDEO_TIMEOUT), so sharing the image pool would let two
+videos starve every queued sprite render. `generate_video` is ASYNC — it
+submits and returns immediately; tasks are 'queued' until a worker picks them
+up, then 'running'; `video_status` polls the task table. Task state lives on
+the ToolRunner instance (self._video_tasks); the mlx-video import is deferred
+(the 'video' extra is optional).
 """
 
 
 class VideoToolsMixin:
+    def _video_executor(self):
+        if self._video_pool is None:
+            from concurrent.futures import ThreadPoolExecutor
+
+            # one at a time: each render owns the GPU for minutes
+            self._video_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="video")
+        return self._video_pool
+
     def tool_generate_video(
         self,
         prompt: str,
@@ -23,17 +33,23 @@ class VideoToolsMixin:
 
         if not prompt or not prompt.strip():
             return "generate_video requires a non-empty 'prompt'", True
-        out = resolve_out(self.workdir, prompt, path)
+        # jail BOTH sides under the sandbox: the input image and the output
+        # path (resolve_out passes absolute paths through untouched)
+        out = self._paths.resolve(str(resolve_out(self.workdir, prompt, path)))
         img = str(self._paths.resolve(image)) if image else None
         self._video_seq += 1
         tid = self._video_seq
-        self._video_tasks[tid] = {"status": "running", "prompt": prompt[:80], "path": str(out)}
+        self._video_tasks[tid] = {"status": "queued", "prompt": prompt[:80], "path": str(out)}
 
         def work() -> None:
-            output, err = render(prompt, out, seed=seed, frames=frames, image=img)
+            self._video_tasks[tid]["status"] = "running"
+            try:
+                output, err = render(prompt, out, seed=seed, frames=frames, image=img)
+            except Exception as exc:  # a crash must never leave the task 'running' forever
+                output, err = f"{type(exc).__name__}: {exc}", True
             self._video_tasks[tid].update(status="error" if err else "done", detail=output)
 
-        self._art_executor().submit(work)
+        self._video_executor().submit(work)
         return (
             f"video task #{tid} started in the background → {out}\n"
             "Rendering takes minutes (first use also downloads the model — much longer). "
@@ -45,11 +61,11 @@ class VideoToolsMixin:
     def tool_video_status(self, task_id: int | None = None) -> tuple[str, bool]:
         if not self._video_tasks:
             return "no video tasks this session", False
-        mark = {"running": "⏳", "done": "✓", "error": "✗"}
+        mark = {"queued": "…", "running": "⏳", "done": "✓", "error": "✗"}
 
         def fmt(i: int, t: dict) -> str:
             line = f"#{i} {mark.get(t['status'], '?')} {t['status']}  {t['path']}"
-            if t["status"] != "running" and t.get("detail"):
+            if t["status"] not in ("queued", "running") and t.get("detail"):
                 line += f"\n    {t['detail'][:300]}"
             return line
 

@@ -92,6 +92,7 @@ class ToolRunner(BashToolsMixin, FileToolsMixin, ImageToolsMixin, VideoToolsMixi
         self._art_pool = None
         self._video_tasks: dict[int, dict] = {}
         self._video_seq = 0
+        self._video_pool = None  # separate 1-worker pool: videos must not starve images
 
     # -- workspace checkpointing ----------------------------------------------
 

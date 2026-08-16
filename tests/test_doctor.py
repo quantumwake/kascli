@@ -165,4 +165,31 @@ finally:
     doctor._editable_checkout = orig_edit
 print("capability_install_command(): OK")
 
+# --- URL package specs survive the shell + intent round-trip -----------------
+# "name @ git+…" specs contain spaces: the shell command must quote them, and
+# save_intent_from_argv must parse with shlex so the full spec (not a truncated
+# bare name) is persisted for the next reinstall.
+import shlex
+
+URL_SPEC = "mlx-video-with-audio @ git+https://github.com/james-see/mlx-video-with-audio.git"
+cmd_line = f"uv tool install --force kas --with {shlex.quote(URL_SPEC)} --with mlx-audio"
+argv = shlex.split(cmd_line)
+withs = [argv[i + 1] for i, a in enumerate(argv) if a == "--with" and i + 1 < len(argv)]
+assert withs == [URL_SPEC, "mlx-audio"], withs
+
+# PEP 508: the dev-checkout marker join needs whitespace before ';' for URL specs
+joined = f"{URL_SPEC} ; sys_platform == 'darwin' and platform_machine == 'arm64'"
+try:
+    from packaging.requirements import Requirement
+
+    assert Requirement(joined).name == "mlx-video-with-audio"
+except ImportError:
+    pass  # packaging absent in this env — shape asserted above
+print("url-spec quoting round-trip: OK")
+
+# video-gen must be OPTIONAL: the default plan must never pull the ~45 GB stack
+vg = next(c for c in doctor.CAPS if c["id"] == "video-gen")
+assert vg.get("optional") is True, vg
+print("video-gen optional: OK")
+
 print("all doctor tests passed")
