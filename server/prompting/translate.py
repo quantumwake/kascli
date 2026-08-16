@@ -132,7 +132,11 @@ def to_chat_messages(
                     content: Any = ([{"type": "text", "text": text}] if text else []) + images
                     chat.append({"role": "user", "content": content})
                 elif chat and chat[-1]["role"] == "user":
-                    chat[-1]["content"] += "\n\n" + text
+                    prev = chat[-1]["content"]
+                    if isinstance(prev, list):  # image turn: content is a block list,
+                        prev.append({"type": "text", "text": text})  # never list += str
+                    else:
+                        chat[-1]["content"] = prev + "\n\n" + text
                 else:
                     chat.append({"role": "user", "content": text})
     return chat
