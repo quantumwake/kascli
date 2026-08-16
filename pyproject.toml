@@ -37,13 +37,26 @@ art = ["mflux>=0.9; sys_platform == 'darwin' and platform_machine == 'arm64'"]
 memory = ["sqlite-vec>=0.1", "model2vec>=0.3"]
 memory-mlx = ["mlx-embeddings>=0.0.1; sys_platform == 'darwin' and platform_machine == 'arm64'"]
 memory-gguf = ["llama-cpp-python>=0.2"]
+# generate_video (LTX-2 via the mlx-video-with-audio fork, MLX) — Apple-Silicon
+# only. Direct git reference (not on PyPI; the `mlx-video` PyPI name is an
+# unrelated placeholder). This fork's generate_av is self-contained with the
+# unified ltx2-mlx-av weights; the Blaizzy original needs a split model layout.
+video = ["mlx-video-with-audio @ git+https://github.com/james-see/mlx-video-with-audio.git ; sys_platform == 'darwin' and platform_machine == 'arm64'"]
 # Multimodal (Apple-Silicon-only runtimes; the agent degrades gracefully without
 # them, and `kas doctor` installs the right ones for the detected platform).
 vision = ["mlx-vlm>=0.1; sys_platform == 'darwin' and platform_machine == 'arm64'"]  # image->text
 voice = ["mlx-whisper>=0.4; sys_platform == 'darwin' and platform_machine == 'arm64'"]  # /listen
-tts = ["mlx-audio>=0.2; sys_platform == 'darwin' and platform_machine == 'arm64'"]  # /say (neural)
+# /say + /converse neural voice. misaki is Kokoro's G2P text processor —
+# mlx-audio treats it as optional but Kokoro HARD-REQUIRES it at runtime; and
+# misaki's English pipeline needs spaCy's en_core_web_sm model, which spaCy
+# cannot self-install into an already-running process (first /say would fail).
+tts = [
+    "mlx-audio>=0.2; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "misaki[en]>=0.6; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl ; sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
 preview = ["pillow>=10.0"]  # inline image preview (/show); cross-platform
-all = ["kas[web,art,memory,vision,voice,tts,preview]"]
+all = ["kas[web,art,video,memory,vision,voice,tts,preview]"]
 # Dev/CI toolchain (linting, types, tests). Pinned so local == CI.
 dev = [
     "ruff==0.12.1",
@@ -59,6 +72,10 @@ kas-server = "server.cli:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+# The video extra uses a direct git URL (PyPI `mlx-video` is squatted).
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["agent", "server", "scripts"]
