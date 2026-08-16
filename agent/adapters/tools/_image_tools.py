@@ -31,13 +31,18 @@ class ImageToolsMixin:
 
         if not prompt or not prompt.strip():
             return "generate_image requires a non-empty 'prompt'", True
-        out = resolve_out(self.workdir, prompt, path)
+        # jail the output path under the sandbox (resolve_out passes absolute
+        # paths through untouched — same policy as the file tools)
+        out = self._paths.resolve(str(resolve_out(self.workdir, prompt, path)))
         self._art_seq += 1
         tid = self._art_seq
         self._art_tasks[tid] = {"status": "running", "prompt": prompt[:80], "path": str(out)}
 
         def work() -> None:
-            output, err = render(prompt, out, seed=seed, steps=steps)
+            try:
+                output, err = render(prompt, out, seed=seed, steps=steps)
+            except Exception as exc:  # a crash must never leave the task 'running' forever
+                output, err = f"{type(exc).__name__}: {exc}", True
             self._art_tasks[tid].update(status="error" if err else "done", detail=output)
 
         self._art_executor().submit(work)

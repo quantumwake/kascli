@@ -51,8 +51,10 @@ def build_command(prompt: str, out_path, *, seed=None, steps=None, bin_path=None
 
 def _missing_hint() -> str:
     return (
-        f"image backend {config.ART_BIN!r} not found — install the 'art' extra "
-        "(`uv add mflux`) and pull a model, or set KAS_ART_BIN to your generator"
+        f"image backend {config.ART_BIN!r} not found — install or UPGRADE the 'art' extra "
+        "(`uv add -U mflux`): the per-model entry points (mflux-generate-flux2, "
+        "mflux-generate-qwen, …) only exist in recent mflux releases. "
+        "Or set KAS_ART_BIN to your generator."
     )
 
 

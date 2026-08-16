@@ -21,6 +21,7 @@ import json
 import os
 import pathlib
 import platform
+import shlex
 import shutil
 import subprocess
 import sys
@@ -180,6 +181,9 @@ CAPS: list[dict] = [
         ],
         "tools": [],
         "gpus": ["metal"],
+        # optional: the default plan must NOT pull a git package whose first
+        # use downloads ~45 GB of weights — video is a deliberate opt-in
+        "optional": True,
     },
     {
         "id": "image-preview",
@@ -301,7 +305,11 @@ def capability_install_command(
             if (cap["gpus"] == ["metal"])
             else ""
         )
-        return ["uv", "add", *[p + marker for p in cap["pkgs"]]], note + " (added to pyproject)"
+        # PEP 508 requires whitespace between a URL spec and its ';marker' —
+        # bare concatenation breaks "name @ https://…" pkgs.
+        return ["uv", "add", *[f"{p} {marker}".strip() for p in cap["pkgs"]]], note + (
+            " (added to pyproject)"
+        )
     if shutil.which("uv"):
         return ["uv", "pip", "install", "--python", sys.executable, *cap["pkgs"]], note
     return [sys.executable, "-m", "pip", "install", *cap["pkgs"]], note
@@ -465,13 +473,15 @@ def install_plan(env: dict, include_optional: bool = False) -> list[str]:
         # never just the missing — otherwise a reinstall drops other features.
         uniq = comprehensive_with(env, include_optional=include_optional)
         src = " ".join(_kas_source())
-        withs = " ".join(f"--with {p}" for p in uniq)
+        # quote every spec: these strings run through sh, and URL specs
+        # ("name @ git+…") contain spaces that would split into stray tokens
+        withs = " ".join(f"--with {shlex.quote(p)}" for p in uniq)
         cmds.append(f"uv tool install --force {src} {withs}")
         cmds.append("# then RESTART kas so it picks up the new packages")
     elif _editable_checkout():  # dev checkout via uv run -> pyproject
-        cmds.append("uv add " + " ".join(dict.fromkeys(pkgs)))
+        cmds.append("uv add " + " ".join(shlex.quote(p) for p in dict.fromkeys(pkgs)))
     else:
-        cmds.append("uv pip install " + " ".join(dict.fromkeys(pkgs)))
+        cmds.append("uv pip install " + " ".join(shlex.quote(p) for p in dict.fromkeys(pkgs)))
     return cmds
 
 
@@ -540,7 +550,9 @@ def guided_install(env: dict, include_optional: bool = False, assume_yes: bool =
         rc = subprocess.run(cmd, shell=True).returncode
         print("  ok" if rc == 0 else f"  failed (exit {rc}) — continuing")
         if rc == 0 and cmd.startswith("uv tool install"):
-            save_intent_from_argv(cmd.split())  # remember it for next reinstall
+            # shlex, not str.split: quoted URL specs ("name @ git+…") must
+            # survive as single --with values, not be truncated to bare names
+            save_intent_from_argv(shlex.split(cmd))  # remember it for next reinstall
 
 
 def save_intent_from_argv(argv) -> None:

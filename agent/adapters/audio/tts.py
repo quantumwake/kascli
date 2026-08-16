@@ -18,6 +18,7 @@ utterance interrupts the previous one. Everything degrades to (message, True).
 """
 
 import json
+import math
 import os
 import pathlib
 import platform
@@ -63,14 +64,18 @@ def _store() -> dict:
 
 
 def save_setting(key: str, value) -> None:
-    """Persist one /voice setting (None deletes it)."""
+    """Persist one /voice setting (None deletes it). Best-effort: a read-only
+    home must not crash the TUI — the setting just won't stick."""
     d = _store()
     if value is None:
         d.pop(key, None)
     else:
         d[key] = value
-    _VOICE_STORE.parent.mkdir(exist_ok=True)
-    _VOICE_STORE.write_text(json.dumps(d, indent=2) + "\n")
+    try:
+        _VOICE_STORE.parent.mkdir(exist_ok=True)
+        _VOICE_STORE.write_text(json.dumps(d, indent=2) + "\n")
+    except OSError:
+        pass
 
 
 def _setting(env: str, key: str, default: str) -> str:
@@ -88,14 +93,28 @@ def voice_settings() -> dict:
         "speed": _setting("KAS_TTS_SPEED", "speed", "1.0"),
         "pitch": _setting("KAS_TTS_PITCH_SEMITONES", "pitch", "0"),
         "fx": _setting("KAS_TTS_FX", "fx", "warrior"),
-        "engine": "kokoro" if _mlx_available() else "native",
+        # what _pipeline will actually use: the KAS_TTS=native override wins
+        # over mere availability of the mlx stack
+        "engine": (
+            "kokoro"
+            if os.environ.get("KAS_TTS", "auto").lower() != "native" and _mlx_available()
+            else "native"
+        ),
     }
 
 
 def kokoro_voices() -> list[str]:
     """Voice ids shipped with the cached Kokoro model (empty if not cached)."""
     model = os.environ.get("KAS_TTS_MODEL", "mlx-community/Kokoro-82M-bf16")
-    hub = pathlib.Path.home() / ".cache" / "huggingface" / "hub"
+    # honor HF cache relocation, same precedence huggingface_hub uses
+    hub = pathlib.Path(
+        os.environ.get("HF_HUB_CACHE")
+        or (
+            pathlib.Path(os.environ["HF_HOME"]) / "hub"
+            if os.environ.get("HF_HOME")
+            else pathlib.Path.home() / ".cache" / "huggingface" / "hub"
+        )
+    )
     d = hub / ("models--" + model.replace("/", "--")) / "snapshots"
     names = {f.stem for f in d.glob("*/voices/*") if f.suffix in (".safetensors", ".pt", ".bin")}
     return sorted(names)
@@ -135,6 +154,12 @@ def _fx_filter() -> str:
         semis = float(_setting("KAS_TTS_PITCH_SEMITONES", "pitch", "0"))
     except ValueError:
         semis = 0.0
+    if not math.isfinite(semis):  # float('nan'/'inf') parse fine but poison ffmpeg args
+        semis = 0.0
+    # clamp like /voice does — env is unvalidated, and beyond ±12 the tempo
+    # compensation leaves atempo's [0.5, 2.0] range: ffmpeg rejects the chain
+    # and the '&&'-joined play step never runs (silent TTS)
+    semis = max(-12.0, min(12.0, semis))
     pitch = _pitch_stage(semis)
     return ",".join(s for s in (pitch, raw) if s)
 

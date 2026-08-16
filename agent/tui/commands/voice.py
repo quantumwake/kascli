@@ -4,6 +4,8 @@ Settings persist to ~/.kascode/voice.json (env vars still override per
 session) and apply from the very next utterance — no restart needed.
 """
 
+import re
+
 from rich.text import Text
 
 from ...adapters.audio import tts
@@ -89,8 +91,21 @@ class VoiceCommand(Command):
 
     def _set_voice(self, app, vid: str) -> None:
         voices = tts.kokoro_voices()
-        if voices and vid not in voices:
-            app.body_write(Text(f"unknown voice {vid!r} — see /voice list", style="yellow"))
+        if voices:
+            if vid not in voices:
+                app.body_write(Text(f"unknown voice {vid!r} — see /voice list", style="yellow"))
+                return
+        elif not re.fullmatch(r"[a-z]{2}_[a-z]+", vid):
+            # No cached voice list to validate against (fresh install, relocated
+            # cache): still require the Kokoro id SHAPE, or a typo'd subcommand
+            # ("/voice hlep") would be persisted as the voice and silently kill
+            # the neural engine on every later utterance.
+            app.body_write(
+                Text(
+                    f"{vid!r} doesn't look like a voice id (e.g. am_onyx) — /voice list",
+                    style="yellow",
+                )
+            )
             return
         tts.save_setting("voice", vid)
         dialect = tts.DIALECTS.get(vid[:1], "?")

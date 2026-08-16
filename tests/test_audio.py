@@ -129,7 +129,26 @@ print("transcribe via warm worker (stubbed): OK")
 
 
 # --- text→voice (TTS) -------------------------------------------------------
+# Hermetic: every tts assert below must see THIS test's settings — not the
+# developer's real ~/.kascode/voice.json (e.g. someone who ran `/voice fx none`)
+# nor exported KAS_TTS_* session overrides.
+import pathlib as _pl  # noqa: E402
+import tempfile as _tf  # noqa: E402
+
 from agent.adapters.audio import tts  # noqa: E402
+
+tts._VOICE_STORE = _pl.Path(_tf.mkdtemp(prefix="kas-test-voice-")) / "voice.json"
+for _k in (
+    "KAS_TTS",
+    "KAS_TTS_FX",
+    "KAS_TTS_FILTER",
+    "KAS_TTS_VOICE",
+    "KAS_TTS_RATE",
+    "KAS_TTS_SPEED",
+    "KAS_TTS_PITCH_SEMITONES",
+    "KAS_KOKORO_VOICE",
+):
+    _os.environ.pop(_k, None)
 
 # native synth writes the spoken text to an output file (macOS say / linux espeak).
 cmd = tts._native_synth("hello world", "/tmp/o.wav")
@@ -275,8 +294,7 @@ from agent.adapters.audio import tts
 with tempfile.TemporaryDirectory() as td:
     _saved_store = tts._VOICE_STORE
     tts._VOICE_STORE = pathlib.Path(td) / "voice.json"
-    for k in ("KAS_KOKORO_VOICE", "KAS_TTS_SPEED", "KAS_TTS_PITCH_SEMITONES", "KAS_TTS_FX"):
-        assert k not in os.environ, f"{k} set in test env"
+    # (KAS_* env already scrubbed at the top of the TTS section)
 
     # defaults
     s = tts.voice_settings()
@@ -303,6 +321,19 @@ with tempfile.TemporaryDirectory() as td:
     del os.environ["KAS_TTS_SPEED"]
     tts.save_setting("pitch", None)
     assert tts.voice_settings()["pitch"] == "0"
+
+    # env pitch is clamped to ±12 (beyond that, atempo leaves ffmpeg's range and
+    # the play step silently never runs) and non-finite values are rejected
+    tts.save_setting("fx", "none")
+    os.environ["KAS_TTS_PITCH_SEMITONES"] = "15"
+    try:
+        chain = tts._fx_filter()
+        assert "atempo=0.5000" in chain, chain  # clamped to +12, not 15
+        os.environ["KAS_TTS_PITCH_SEMITONES"] = "nan"
+        assert tts._fx_filter() == "", tts._fx_filter()  # nan -> pitch off
+    finally:
+        del os.environ["KAS_TTS_PITCH_SEMITONES"]
+    tts.save_setting("fx", None)
     tts._VOICE_STORE = _saved_store
 print("voice settings: OK")
 
