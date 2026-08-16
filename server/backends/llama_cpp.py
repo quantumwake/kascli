@@ -698,8 +698,9 @@ class LlamaCppEngine:
         return active
 
     def ping_status(self) -> dict[str, Any]:
-        self.ping_count += 1
-        self.last_ping_ts = time.monotonic()
+        """Read-only, like the MLX engine's: this backend never emits engine-level
+        pings itself (wall-clock keep-alives come from the pipeline), so the
+        counters stay put unless generate() ever starts yielding pings."""
         age = round(time.monotonic() - self.last_ping_ts, 1) if self.last_ping_ts else None
         return {"pings": self.ping_count, "last_ping_age": age}
 

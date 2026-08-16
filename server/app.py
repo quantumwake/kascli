@@ -302,7 +302,7 @@ def messages(req: MessagesRequest, request: Request):
     memos = _memos_for(req.model)
     # /viz: when the client asks (any overlay on), the engine emits per-token
     # logprobs. Only then — the top-k+entropy compute isn't free.
-    viz = bool(request.headers.get("x-agent-viz"))
+    viz = request.headers.get("x-agent-viz", "").strip().lower() not in ("", "0", "false", "off")
 
     # Warm KV-resume: if persistence is on and the agent told us its session
     # dir, rehydrate this thread's KV cache + continuation memo from disk before
