@@ -148,7 +148,14 @@ CAPS: list[dict] = [
         "label": "Text → voice (neural, optional)",
         "enables": "higher-quality /say via mlx-audio/Kokoro",
         "module": "mlx_audio",
-        "pkgs": ["mlx-audio"],
+        # misaki = Kokoro's G2P; mlx-audio omits it but Kokoro needs it at
+        # runtime — and misaki's English pipeline needs spaCy's small model,
+        # which spaCy can't self-install into a running process.
+        "pkgs": [
+            "mlx-audio",
+            "misaki[en]",
+            "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
+        ],
         "tools": [],
         "gpus": ["metal"],
         "optional": True,
@@ -159,6 +166,18 @@ CAPS: list[dict] = [
         "enables": "generate_image tool (--art)",
         "module": "mflux",
         "pkgs": ["mflux"],
+        "tools": [],
+        "gpus": ["metal"],
+    },
+    {
+        "id": "video-gen",
+        "label": "Text → video (LTX-2 / mlx-video)",
+        "enables": "generate_video tool (--art)",
+        "module": "mlx_video",
+        # PyPI `mlx-video` is an unrelated placeholder — install from git.
+        "pkgs": [
+            "mlx-video-with-audio @ git+https://github.com/james-see/mlx-video-with-audio.git"
+        ],
         "tools": [],
         "gpus": ["metal"],
     },
