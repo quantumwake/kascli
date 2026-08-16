@@ -35,6 +35,7 @@ from .stop import StopCommand
 from .subagent import SubagentCommand
 from .theme import ThemeCommand
 from .viz import VizCommand
+from .voice import VoiceCommand
 from .yolo import YoloCommand
 
 # Ordered: prefix-matching commands (/model, /memory, /subagent) keep their relative
@@ -62,6 +63,7 @@ REGISTRY = [
     ListenCommand(),
     ImageCommand(),
     SayCommand(),
+    VoiceCommand(),
     ConverseCommand(),
     SandboxCommand(),
     StatusCommand(),

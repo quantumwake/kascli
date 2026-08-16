@@ -266,4 +266,50 @@ AgentApp.voice_indicator(app, None)  # release
 assert app.fx_override is None
 print("voice_indicator: OK")
 
+# --- /voice settings: persistence, precedence, and command assembly ----------
+import os
+import tempfile
+
+from agent.adapters.audio import tts
+
+with tempfile.TemporaryDirectory() as td:
+    _saved_store = tts._VOICE_STORE
+    tts._VOICE_STORE = pathlib.Path(td) / "voice.json"
+    for k in ("KAS_KOKORO_VOICE", "KAS_TTS_SPEED", "KAS_TTS_PITCH_SEMITONES", "KAS_TTS_FX"):
+        assert k not in os.environ, f"{k} set in test env"
+
+    # defaults
+    s = tts.voice_settings()
+    assert s["voice"] == "am_onyx" and s["speed"] == "1.0" and s["pitch"] == "0", s
+
+    # persisted settings apply to the synth commands
+    tts.save_setting("voice", "bm_george")
+    tts.save_setting("speed", "1.2")
+    tts.save_setting("pitch", "-3")
+    if tts._mlx_available():
+        cmd = tts._kokoro_synth("hello", "/tmp/x.wav")
+        assert "bm_george" in cmd and "--speed 1.2" in cmd, cmd
+        assert "--lang_code b" in cmd, cmd  # dialect follows the voice prefix
+    fx = tts._fx_filter()
+    assert "asetrate" in fx, fx  # pitch stage present
+    argv = tts._native_synth("hello", "/tmp/x.wav")
+    if argv and argv[0] == "say":
+        assert "rate 186" in argv[-1], argv  # 155 * 1.2 cadence scaling
+        assert any(a.startswith("--data-format=") for a in argv), argv  # WAV needs PCM
+
+    # env override beats the store; deleting a key restores the default
+    os.environ["KAS_TTS_SPEED"] = "0.8"
+    assert tts.voice_settings()["speed"] == "0.8"
+    del os.environ["KAS_TTS_SPEED"]
+    tts.save_setting("pitch", None)
+    assert tts.voice_settings()["pitch"] == "0"
+    tts._VOICE_STORE = _saved_store
+print("voice settings: OK")
+
+# /voice is registered and matches
+from agent.tui.commands import REGISTRY
+
+assert any(c.name == "/voice" for c in REGISTRY)
+print("/voice registered: OK")
+
 print("all audio tests passed")
