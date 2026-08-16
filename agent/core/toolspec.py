@@ -165,6 +165,66 @@ IMAGE_TOOLS: list[dict] = [
             },
         },
     },
+    # Video generation rides the same --art gate as images: one opt-in for all
+    # local generative media (the backends differ — mflux vs mlx-video — but
+    # the capability the user grants is the same).
+    {
+        "name": "generate_video",
+        "description": (
+            "Start generating a short VIDEO (MP4) with a LOCAL model (LTX-2 via "
+            "mlx-video) — ASYNC: it renders in the BACKGROUND and returns IMMEDIATELY "
+            "with a task id and the output path. Rendering takes minutes; the FIRST use "
+            "may also download the model (tens of GB — very slow once, cached after). "
+            "Keep working and poll with video_status. Write a cinematic prompt (subject, "
+            "motion, camera, lighting). Optionally pass `image` to animate an existing "
+            "still (image-to-video). Frame count must be 4n+1 (default 33 ≈ 1.4 s)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "prompt": {
+                    "type": "string",
+                    "description": "Detailed description: subject, motion, camera, lighting",
+                },
+                "path": {
+                    "type": "string",
+                    "description": (
+                        "Output MP4 path (relative to workdir; default assets/generated/<slug>.mp4)"
+                    ),
+                },
+                "seed": {
+                    "type": "integer",
+                    "description": "Fix for reproducible results",
+                },
+                "frames": {
+                    "type": "integer",
+                    "description": "Frame count, must be 4n+1 (default 33; 24 fps)",
+                },
+                "image": {
+                    "type": "string",
+                    "description": "Optional input image path to animate (image-to-video)",
+                },
+            },
+            "required": ["prompt"],
+        },
+    },
+    {
+        "name": "video_status",
+        "description": (
+            "Check background video-generation tasks started by generate_video: their "
+            "status (running / done / error) and output paths. Pass a task_id for one, "
+            "or omit to list all."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "integer",
+                    "description": "A specific task id (omit to list all)",
+                },
+            },
+        },
+    },
 ]
 
 TOOLS: list[dict] = [
